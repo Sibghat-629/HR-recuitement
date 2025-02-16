@@ -1,0 +1,73 @@
+import spacy
+import pandas as pd
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+from datetime import datetime, timedelta
+
+# Load spaCy's English language model for NLP
+nlp = spacy.load("en_core_web_sm")
+
+# Sample job description
+job_description = """
+We are looking for a Software Engineer with expertise in Python, machine learning, and cloud computing. 
+The ideal candidate should have 3+ years of experience and strong problem-solving skills.
+"""
+
+# Static LinkedIn profile data
+profile_data = {
+    "localizedFirstName": "John",
+    "localizedLastName": "Doe",
+    "headline": "Experienced Software Engineer",
+    "experience": [
+        {"title": "Software Engineer", "description": "Developed various applications using Python and machine learning."},
+        {"title": "Senior Software Engineer", "description": "Led a team of engineers to build scalable cloud solutions."}
+    ]
+}
+
+# Extract relevant information from the static profile data
+name = profile_data.get("localizedFirstName", "Unknown") + " " + profile_data.get("localizedLastName", "")
+summary = profile_data.get("headline", "")
+experiences = profile_data.get("experience", [])
+experience_text = " ".join([exp.get("title", "") + " " + exp.get("description", "") for exp in experiences])
+resume_text = f"{summary} {experience_text}"
+resumes = [{"name": name, "text": resume_text}]
+
+# Convert resumes to a DataFrame
+resumes_df = pd.DataFrame(resumes)
+
+# Function to preprocess text using spaCy
+def preprocess_text(text):
+    doc = nlp(text.lower())
+    tokens = [token.lemma_ for token in doc if not token.is_stop and not token.is_punct]
+    return " ".join(tokens)
+
+# Preprocess job description and resumes
+job_description_processed = preprocess_text(job_description)
+resumes_df["processed_text"] = resumes_df["text"].apply(preprocess_text)
+
+# Vectorize text using TF-IDF
+vectorizer = TfidfVectorizer()
+tfidf_matrix = vectorizer.fit_transform([job_description_processed] + resumes_df["processed_text"].tolist())
+
+# Calculate cosine similarity between job description and resumes
+cosine_similarities = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:]).flatten()
+resumes_df["similarity_score"] = cosine_similarities
+
+# Rank candidates based on similarity score
+ranked_candidates = resumes_df.sort_values(by="similarity_score", ascending=False)
+
+# Display ranked candidates
+print("Ranked Candidates:")
+print(ranked_candidates[["name", "similarity_score"]])
+
+# Function to schedule interviews
+def schedule_interview(candidate_name, similarity_score):
+    if similarity_score > 0.5:  # Threshold for scheduling interviews
+        interview_time = datetime.now() + timedelta(days=2)  # Schedule interview 2 days from now
+        print(f"Interview scheduled for {candidate_name} on {interview_time.strftime('%Y-%m-%d %H:%M')}")
+    else:
+        print(f"{candidate_name} does not meet the required threshold for an interview.")
+
+# Schedule interviews for top candidates
+for _, row in ranked_candidates.iterrows():
+    schedule_interview(row["name"], row["similarity_score"])
