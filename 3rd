@@ -1,0 +1,167 @@
+import spacy
+import pandas as pd
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+from datetime import datetime, timedelta
+import streamlit as st
+import requests
+
+# Load spaCy's English language model for NLP
+nlp = spacy.load("en_core_web_sm")
+st._config.set_option("server.fileWatcherType", "none")
+
+# DeepSeek API endpoint and headers
+DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
+DEEPSEEK_API_KEY = "your_deepseek_api_key_here"
+headers = {
+    "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+    "Content-Type": "application/json"
+}
+
+# Function to preprocess text using spaCy
+def preprocess_text(text):
+    """
+    Preprocesses the input text by lowercasing, lemmatizing, and removing stopwords and punctuation.
+    """
+    doc = nlp(text.lower())
+    tokens = [token.lemma_ for token in doc if not token.is_stop and not token.is_punct]
+    return " ".join(tokens)
+
+# Function to extract resume text from a profile
+def extract_resume_text(profile):
+    """
+    Extracts and combines relevant text from a candidate's profile.
+    """
+    name = profile.get("localizedFirstName", "Unknown") + " " + profile.get("localizedLastName", "")
+    summary = profile.get("headline", "")
+    experiences = profile.get("experience", [])
+    experience_text = " ".join([exp.get("title", "") + " " + exp.get("description", "") for exp in experiences])
+    resume_text = f"{summary} {experience_text}"
+    return name, resume_text
+
+# Function to calculate similarity and rank candidates
+def rank_candidates(job_description, profiles, threshold=0.5):
+    """
+    Ranks candidates based on the similarity between their resumes and the job description.
+    """
+    resumes = []
+    for profile in profiles:
+        name, resume_text = extract_resume_text(profile)
+        resumes.append({"name": name, "text": resume_text})
+
+    # Convert resumes to a DataFrame
+    resumes_df = pd.DataFrame(resumes)
+
+    # Preprocess job description and resumes
+    job_description_processed = preprocess_text(job_description)
+    resumes_df["processed_text"] = resumes_df["text"].apply(preprocess_text)
+
+    # Vectorize text using TF-IDF
+    vectorizer = TfidfVectorizer()
+    tfidf_matrix = vectorizer.fit_transform([job_description_processed] + resumes_df["processed_text"].tolist())
+
+    # Calculate cosine similarity between job description and resumes
+    cosine_similarities = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:]).flatten()
+    resumes_df["similarity_score"] = cosine_similarities
+
+    # Rank candidates based on similarity score
+    ranked_candidates = resumes_df.sort_values(by="similarity_score", ascending=False)
+    return ranked_candidates, threshold
+
+# Function to schedule interviews
+def schedule_interview(candidate_name, similarity_score, threshold):
+    """
+    Schedules an interview if the candidate's similarity score exceeds the threshold.
+    """
+    if similarity_score > threshold:
+        interview_time = datetime.now() + timedelta(days=2)  # Schedule interview 2 days from now
+        return f"✅ Interview scheduled for **{candidate_name}** on {interview_time.strftime('%Y-%m-%d %H:%M')}"
+    else:
+        return f"❌ **{candidate_name}** does not meet the required threshold for an interview."
+
+# Function to handle general questions using DeepSeek API
+def handle_general_question(question):
+    """
+    Handles general questions using the DeepSeek API.
+    """
+    data = {
+        "model": "deepseek-chat",
+        "messages": [{"role": "user", "content": question}]
+    }
+    response = requests.post(DEEPSEEK_API_URL, headers=headers, json=data)
+    if response.status_code == 200:
+        return response.json()["choices"][0]["message"]["content"]
+    else:
+        return "I'm sorry, I couldn't process your request. Please try again later."
+
+# Streamlit App
+def main():
+    st.set_page_config(page_title="Dynamic Chatbot", layout="wide")
+    st.title("🤖 Dynamic Chatbot for Candidate Ranking and More")
+    st.markdown("---")
+
+    # Sidebar for job description and threshold
+    st.sidebar.header("Job Description")
+    job_description = st.sidebar.text_area("Enter Job Description:", """
+    We are looking for a Software Engineer with expertise in Python, machine learning, and cloud computing. 
+    The ideal candidate should have 3+ years of experience and strong problem-solving skills.
+    """)
+
+    threshold = st.sidebar.slider("Similarity Threshold for Interviews", min_value=0.0, max_value=1.0, value=0.5, step=0.05)
+
+    # Static LinkedIn profile data for 20 employees
+    profiles = [
+        {"localizedFirstName": "John", "localizedLastName": "Doe", "headline": "Experienced Software Engineer",
+         "experience": [
+             {"title": "Software Engineer", "description": "Developed various applications using Python and machine learning."},
+             {"title": "Senior Software Engineer", "description": "Led a team of engineers to build scalable cloud solutions."}
+         ]},
+        {"localizedFirstName": "Jane", "localizedLastName": "Smith", "headline": "Data Scientist",
+         "experience": [
+             {"title": "Data Scientist", "description": "Built predictive models using Python and TensorFlow."},
+             {"title": "Machine Learning Engineer", "description": "Deployed machine learning models on AWS."}
+         ]},
+        {"localizedFirstName": "Alice", "localizedLastName": "Johnson", "headline": "Cloud Architect",
+         "experience": [
+             {"title": "Cloud Architect", "description": "Designed and implemented cloud infrastructure on Azure."},
+             {"title": "DevOps Engineer", "description": "Automated CI/CD pipelines using Jenkins and Docker."}
+         ]},
+        # Add 17 more profiles here...
+    ]
+
+    # Add 17 more profiles (for brevity, I'm adding placeholders)
+    for i in range(3, 20):
+        profiles.append({
+            "localizedFirstName": f"Employee{i}", "localizedLastName": "Doe", "headline": "Software Engineer",
+            "experience": [
+                {"title": "Software Engineer", "description": "Worked on backend development using Python."},
+                {"title": "Full Stack Developer", "description": "Developed web applications using React and Node.js."}
+            ]
+        })
+
+    # Chatbot interface
+    st.header("💬 Chatbot")
+    user_input = st.text_input("Ask me anything:")
+
+    if user_input:
+        response = handle_general_question(user_input)
+        st.write(f"**Bot:** {response}")
+
+    # Rank candidates button
+    if st.sidebar.button("🚀 Rank Candidates"):
+        with st.spinner("Ranking candidates..."):
+            ranked_candidates, threshold = rank_candidates(job_description, profiles, threshold)
+            st.success("Candidates ranked successfully!")
+            st.markdown("---")
+            st.subheader("📊 Ranked Candidates")
+            st.dataframe(ranked_candidates[["name", "similarity_score"]].style.background_gradient(cmap="Blues"))
+
+            # Schedule interviews for top candidates
+            st.markdown("---")
+            st.subheader("📅 Interview Scheduling")
+            for _, row in ranked_candidates.iterrows():
+                st.markdown(schedule_interview(row["name"], row["similarity_score"], threshold))
+
+# Run the app
+if __name__ == "__main__":
+    main()
